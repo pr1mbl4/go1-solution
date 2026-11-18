@@ -25,7 +25,8 @@ GitHub: https://github.com/pr1mbl4/go1-solution
 
 - `Dockerfile` — образ на базе организаторского
   `registry.cookcloud.ru/base_images/ros2-base-humble-amd64:v1.0.1`
-  (Ubuntu 22.04 + ROS 2 Humble + CycloneDDS + пользователь `ros`, UID 1000);
+  (в Dockerfile запинен по digest `sha256:4d4a1849…eec243d`;
+  Ubuntu 22.04 + ROS 2 Humble + CycloneDDS + пользователь `ros`, UID 1000);
 - `entrypoint.sh` — контракт запуска: аргументы `ping`, `T2`, `T3`, `T4`, `T5`;
 - `check_t1.sh` — локальная проверка образа по всем критериям ТЗ;
 - `README.md` — этот файл.
@@ -35,7 +36,7 @@ GitHub: https://github.com/pr1mbl4/go1-solution
 Нужен Docker Engine с Buildx (архитектура хоста x86_64).
 
 ```bash
-docker pull registry.cookcloud.ru/base_images/ros2-base-humble-amd64:v1.0.1
+docker pull registry.cookcloud.ru/base_images/ros2-base-humble-amd64@sha256:4d4a184901f154849d59477a077ce507f31fdf63b8bedd8caea460607eec243d
 docker build --platform linux/amd64 -t go1-participant:t1 .
 ```
 

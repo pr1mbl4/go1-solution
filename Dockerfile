@@ -9,7 +9,8 @@
 # ROS 2 Humble + CycloneDDS + пользователь ros (UID/GID 1000). Он публично
 # доступен из registry.cookcloud.ru без авторизации.
 
-FROM --platform=linux/amd64 registry.cookcloud.ru/base_images/ros2-base-humble-amd64:v1.0.1
+# Пин по digest тега v1.0.1 — сборка воспроизводима, тег у организаторов может перезаписаться.
+FROM --platform=linux/amd64 registry.cookcloud.ru/base_images/ros2-base-humble-amd64@sha256:4d4a184901f154849d59477a077ce507f31fdf63b8bedd8caea460607eec243d
 
 # RMW по требованию ТЗ (запускатель организаторов передаёт то же значение
 # переменной в контейнер; совпадающие значения ничего не ломают).

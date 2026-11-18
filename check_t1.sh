@@ -52,7 +52,7 @@ awk -v t="$elapsed" 'BEGIN { exit !(t < 10.0) }' \
 # Сам ответ передаётся через переменную окружения, потому что stdin занят
 # кодом проверки (python3 - читает программу из stdin-heredoc).
 json_err=$(PING_JSON="$ping_out" python3 -I - 2>&1 <<'PYEOF'
-import json, os
+import json, os, sys
 raw = os.environ.get("PING_JSON", "")
 try:
     d = json.loads(raw)
