@@ -1,4 +1,7 @@
-# go1-solution — решение команды Hackathon Go1
+# go1-solution — решение команды «Перспектива» (Hackathon Go1)
+
+Команда: **Перспектива** (`perspektiva` — латиницей для Harbor).
+GitHub: https://github.com/pr1mbl4/go1-solution
 
 Решение заочного этапа хакатона Unitree Go1: Docker-образ **Participant**, который
 инфраструктура организаторов запускает парой с контейнером Simulator/Judge.
@@ -62,11 +65,11 @@ docker build --platform linux/amd64 -t go1-participant:t1 .
 2. `docker login registry.cookcloud.ru` (учётка команды от организаторов).
 3. Публикация:
    ```bash
-   IMAGE="registry.cookcloud.ru/go1-hackathon-remote-stage-<TEAM>/<TEAM>:latest"
+   IMAGE="registry.cookcloud.ru/go1-hackathon-remote-stage-perspektiva/perspektiva:latest"
    docker buildx build --platform linux/amd64 -t "$IMAGE" --push .
    ```
 4. Получить digest: `docker buildx imagetools inspect "$IMAGE"` → `Digest: sha256:…`
-5. Проверить загрузку: `docker pull --platform linux/amd64 <repo>@sha256:<digest>`
+5. Проверить загрузку: `docker pull --platform linux/amd64 <repo>@<digest>`
 6. В личный кабинет: ссылка на коммит GitHub + команда `docker pull` по digest.
 
 Перед пересдачей при необходимости обновить `supported_tasks` в `entrypoint.sh`,
