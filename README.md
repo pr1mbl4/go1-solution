@@ -59,14 +59,15 @@ docker build --platform linux/amd64 -t go1-participant:t1 .
 - `T2`/`T3`/`T4`/`T5` — не реализованы: диагностика в stderr, код 69.
 - Прочее — usage в stderr, код 64.
 
-## Сдача решения (когда будут учётные данные)
+## Сдача решения
 
 1. `git push` — исходники в публичный GitHub-репозиторий, зафиксировать коммит:
    `git rev-parse HEAD`.
-2. `docker login registry.cookcloud.ru` (учётка команды от организаторов).
+2. `docker login registry.cookcloud.ru -u perspektiva` (учётка команды от организаторов;
+   проект команды в Harbor — «perspektiva»).
 3. Публикация:
    ```bash
-   IMAGE="registry.cookcloud.ru/go1-hackathon-remote-stage-perspektiva/perspektiva:latest"
+   IMAGE="registry.cookcloud.ru/perspektiva/perspektiva:latest"
    docker buildx build --platform linux/amd64 -t "$IMAGE" --push .
    ```
 4. Получить digest: `docker buildx imagetools inspect "$IMAGE"` → `Digest: sha256:…`
