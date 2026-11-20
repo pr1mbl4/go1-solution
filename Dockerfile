@@ -16,6 +16,9 @@ FROM --platform=linux/amd64 registry.cookcloud.ru/base_images/ros2-base-humble-a
 # переменной в контейнер; совпадающие значения ничего не ломают).
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
+# Явный bash для RUN: ниже используется `source` (в dash его нет).
+SHELL ["/bin/bash", "-c"]
+
 # ---- T2: MuJoCo для проверки самоколлизий ---------------------------------
 # Версия mujoco и модель Menagerie совпадают с судейской средой
 # (ТЗ T2 п. 4.3: MuJoCo 3.3.7, Menagerie rev 0059d433); numpy < 2 требуется
