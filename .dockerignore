@@ -2,8 +2,10 @@
 # Остальное исключаем, чтобы контекст сборки был минимальным.
 .git
 .gitignore
+.gitattributes
 README.md
 check_t1.sh
+tools/
 *.log
 __pycache__/
 .venv/
