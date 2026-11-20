@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Docker-образ команды для Hackathon Go1 (задание T1 — подготовка сдачи решения).
+# Docker-образ команды для Hackathon Go1 (задания T1, T2).
 #
 # Требования ТЗ п. 3.1: linux/amd64, Ubuntu 22.04 LTS, ROS 2 Humble,
 # Eclipse CycloneDDS (rmw_cyclonedds_cpp), только CPU, запуск без root,
@@ -16,7 +16,38 @@ FROM --platform=linux/amd64 registry.cookcloud.ru/base_images/ros2-base-humble-a
 # переменной в контейнер; совпадающие значения ничего не ломают).
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
+# ---- T2: MuJoCo для проверки самоколлизий ---------------------------------
+# Версия mujoco и модель Menagerie совпадают с судейской средой
+# (ТЗ T2 п. 4.3: MuJoCo 3.3.7, Menagerie rev 0059d433); numpy < 2 требуется
+# самим mujoco 3.3.7. Сеть нужна только на этапе сборки.
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3-pip \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m pip install --no-cache-dir "numpy<2" "mujoco==3.3.7"
+
+# ---- Рабочее пространство участника ----------------------------------------
+# Путь совпадает с конвенцией публичного симулятора (/opt/go1_participant/...),
+# чтобы локальные проверки находили unitree_go без дополнительных настроек.
+RUN mkdir -p /opt/go1_participant && chown -R ros:ros /opt/go1_participant
+
+COPY --chown=ros:ros ros2_ws /opt/go1_participant/ros2_ws
+COPY --chown=ros:ros models/unitree_go1 /opt/go1_participant/models/unitree_go1
+
+USER ros
+RUN source /opt/ros/humble/setup.bash \
+    && cd /opt/go1_participant/ros2_ws \
+    && colcon build --packages-up-to safety_block --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+# Проверки на этапе сборки: интерфейсы unitree_go собрались, модель и пары
+# читаются, все 655 проверяемых пар на месте.
+RUN source /opt/ros/humble/setup.bash \
+    && source /opt/go1_participant/ros2_ws/install/setup.bash \
+    && python3 -c "from unitree_go.msg import LowCmd, LowState; assert len(LowCmd().motor_cmd) == 20" \
+    && python3 -c "from safety_block.collision import CollisionChecker; c = CollisionChecker('/opt/go1_participant/models/unitree_go1'); assert len(c.pairs) == 655, len(c.pairs)"
+
 # Контракт запуска: исполняемый /entrypoint.sh в корне файловой системы.
+USER root
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod 755 /entrypoint.sh \
     && bash -n /entrypoint.sh

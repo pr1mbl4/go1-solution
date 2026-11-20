@@ -12,7 +12,7 @@
 # Файл запускается БЕЗ прав root (пользователь ros, UID 1000).
 
 # ---- Параметры ответа ping (править здесь перед пересдачей) ---------------
-SUPPORTED_TASKS="[]"            # перечень реализованных заданий, напр. ["T2"]
+SUPPORTED_TASKS='["T2"]'        # перечень реализованных заданий, напр. ["T2"]
 SELF_TRAINED_RL="false"         # true — RL-политика обучена командой
 PREFERRED_SPEED_MPS="null"      # рекомендуемая скорость T3 в м/с или null
 # ---------------------------------------------------------------------------
@@ -29,7 +29,16 @@ case "${1:-}" in
             "$SUPPORTED_TASKS" "$SELF_TRAINED_RL" "$PREFERRED_SPEED_MPS"
         exit 0
         ;;
-    T2|T3|T4|T5)
+    T2)
+        # Safety Block: /lowcmd_bare -> проверки -> /lowcmd не реже 50 Гц.
+        # use_sim_time обязателен: частота и watchdog считаются по /clock.
+        source /opt/ros/humble/setup.bash
+        source /opt/go1_participant/ros2_ws/install/setup.bash
+        exec ros2 run safety_block safety_node --ros-args \
+            -p use_sim_time:=true \
+            -p model_dir:=/opt/go1_participant/models/unitree_go1
+        ;;
+    T3|T4|T5)
         # Задание не реализовано: решение с пустым supported_tasks допущено
         # только к T1. Диагностика — в stderr, ненулевой код выхода.
         echo "task $1 is not implemented by this solution (supported_tasks=$SUPPORTED_TASKS)" >&2
