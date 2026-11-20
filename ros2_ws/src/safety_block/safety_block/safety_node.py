@@ -15,7 +15,7 @@ from safety_block.collision import CollisionChecker
 class SafetyNode(Node):
     def __init__(self):
         super().__init__('safety_block')
-        self.declare_parameter('publish_rate_hz', 100.0)
+        self.declare_parameter('publish_rate_hz', 200.0)
         self.declare_parameter('watchdog_timeout_s', logic.WATCHDOG_TIMEOUT_S)
         self.declare_parameter('rate_limit_deg', 4.99)
         self.declare_parameter('collision_check', True)

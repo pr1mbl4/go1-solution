@@ -74,6 +74,7 @@ class SafetyCore:
         self.hold_kd = float(hold_kd)
 
         self._target = stand_command()
+        self._published_q = None   # последний q, ушедший в /lowcmd
         self._last_bare_time = None
         self._holding = False
         self.counters = Counter()
@@ -98,14 +99,18 @@ class SafetyCore:
 
         # Лимиты суставов: опасное значение корректируется до допустимого.
         q_clipped = np.clip(q, Q_MIN, Q_MAX)
-        # Rate-limit: за один принятый шаг не дальше 5 градусов на сустав.
-        q_step = np.clip(q_clipped, self._target.q - self.rate_limit_rad,
-                         self._target.q + self.rate_limit_rad)
+        # Rate-limit: судья смотрит на выходной поток, поэтому шаг считается
+        # от последней ОПУБЛИКОВАННОЙ цели. До первой публикации — от текущей.
+        # Тогда между любыми соседними сообщениями /lowcmd дельта <= 5 градусов,
+        # даже если между тиками пришло несколько /lowcmd_bare.
+        reference = self._published_q if self._published_q is not None else self._target.q
+        q_step = np.clip(q_clipped, reference - self.rate_limit_rad,
+                         reference + self.rate_limit_rad)
 
         if self.collision_checker is not None:
             # Повтор той же цели не требует перепроверки перехода.
             if not np.array_equal(q_step, self._target.q):
-                if not self.collision_checker.check_transition(self._target.q, q_step):
+                if not self.collision_checker.check_transition(reference, q_step):
                     self.counters[REJECTED_COLLISION] += 1
                     return REJECTED_COLLISION
 
@@ -122,12 +127,15 @@ class SafetyCore:
                 self._holding = True
                 self.counters["watchdog_hold"] += 1
             # Удержание последней принятой ЦЕЛИ, а не измеренного положения.
-            return Command(q=self._target.q.copy(), dq=np.zeros(N_JOINTS),
-                           tau=np.zeros(N_JOINTS),
-                           kp=np.full(N_JOINTS, self.hold_kp),
-                           kd=np.full(N_JOINTS, self.hold_kd))
-        self._holding = False
-        return self._target.copy()
+            command = Command(q=self._target.q.copy(), dq=np.zeros(N_JOINTS),
+                              tau=np.zeros(N_JOINTS),
+                              kp=np.full(N_JOINTS, self.hold_kp),
+                              kd=np.full(N_JOINTS, self.hold_kd))
+        else:
+            self._holding = False
+            command = self._target.copy()
+        self._published_q = command.q.copy()
+        return command
 
     @property
     def holding(self):

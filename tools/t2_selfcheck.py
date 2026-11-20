@@ -162,6 +162,9 @@ def main():
     gaps = np.diff(times)
     max_gap = float(gaps.max()) if len(gaps) else float('inf')
     print(f'частота /lowcmd: {freq:.1f} Гц, макс. интервал: {max_gap * 1000:.1f} мс')
+    big = [(i, float(g)) for i, g in enumerate(gaps) if g > 0.05]
+    for i, g in big[:10]:
+        print(f'  разрыв {g * 1000:.1f} мс в t={times[i] - times[0]:.2f} с от начала прослушивания')
     if freq < 50.0:
         failures.append(f'частота {freq:.1f} Гц < 50 Гц')
     if max_gap > 0.1:

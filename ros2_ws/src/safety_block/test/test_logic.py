@@ -53,6 +53,19 @@ def test_rate_limit_five_degrees_per_step():
     assert math.isclose(step[1], math.radians(4.99), rel_tol=1e-6)
 
 
+def test_rate_limit_applies_between_outputs():
+    """Две команды между тиками публикации не дают шаг > 5 градусов в выходе."""
+    core = logic.SafetyCore()
+    q = logic.STAND_Q.copy()
+    q[1] += math.radians(20.0)
+    core.on_tick(0.0)  # первая публикация стойки
+    core.on_message(0.001, *command(q=q))
+    core.on_message(0.002, *command(q=q))
+    out1 = core.on_tick(0.010)
+    out2 = core.on_tick(0.020)
+    assert np.all(np.abs(out2.q - out1.q) <= math.radians(5.0) + 1e-9)
+
+
 def test_safe_commands_pass_through():
     core = logic.SafetyCore()
     q = logic.STAND_Q.copy()
