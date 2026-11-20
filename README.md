@@ -66,6 +66,19 @@ GitHub: https://github.com/pr1mbl4/go1-solution
 cd ros2_ws/src/safety_block && python3 -m pytest test/test_logic.py
 ```
 
+Сквозная проверка на стенде (внутри запущенной пары Simulator + Participant):
+
+```bash
+docker cp tools/t2_selfcheck.py <participant>:/tmp/t2_selfcheck.py
+docker exec -it <participant> bash -lc \
+  'source /opt/ros/humble/setup.bash && source /opt/go1_participant/ros2_ws/install/setup.bash \
+   && python3 /tmp/t2_selfcheck.py'
+```
+
+Стенд подаёт безопасные/рывковые/NaN-команды, обрывает поток, шлёт опасную
+конфигурацию и проверяет частоту, интервалы, лимиты, rate-limit, удержание,
+отсутствие NaN и коллизий на выходе. Код 0 — все проверки пройдены.
+
 ## Состав проекта
 
 - `Dockerfile` — образ на базе организаторского

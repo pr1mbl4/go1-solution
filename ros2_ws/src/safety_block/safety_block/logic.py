@@ -103,9 +103,11 @@ class SafetyCore:
                          self._target.q + self.rate_limit_rad)
 
         if self.collision_checker is not None:
-            if not self.collision_checker.check_transition(self._target.q, q_step):
-                self.counters[REJECTED_COLLISION] += 1
-                return REJECTED_COLLISION
+            # Повтор той же цели не требует перепроверки перехода.
+            if not np.array_equal(q_step, self._target.q):
+                if not self.collision_checker.check_transition(self._target.q, q_step):
+                    self.counters[REJECTED_COLLISION] += 1
+                    return REJECTED_COLLISION
 
         self._target = Command(q=q_step, dq=dq, tau=tau, kp=kp, kd=kd)
         self.counters[ACCEPTED] += 1
