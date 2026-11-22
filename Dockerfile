@@ -24,10 +24,15 @@ SHELL ["/bin/bash", "-c"]
 # (ТЗ T2 п. 4.3: MuJoCo 3.3.7, Menagerie rev 0059d433); numpy < 2 требуется
 # самим mujoco 3.3.7. Сеть нужна только на этапе сборки.
 USER root
+USER root
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3-pip \
-    && rm -rf /var/lib/apt/lists/* \
-    && python3 -m pip install --no-cache-dir "numpy<2" "mujoco==3.3.7"
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m pip install --no-cache-dir "numpy<2" "mujoco==3.3.7"
+
+RUN python3 -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+    && python3 -m pip install --no-cache-dir --force-reinstall "packaging<24" "setuptools<70"
 
 # ---- Рабочее пространство участника ----------------------------------------
 # Путь совпадает с конвенцией публичного симулятора (/opt/go1_participant/...),
@@ -38,9 +43,21 @@ COPY --chown=ros:ros ros2_ws /opt/go1_participant/ros2_ws
 COPY --chown=ros:ros models/unitree_go1 /opt/go1_participant/models/unitree_go1
 
 USER ros
+
+# ---- T3: RL Controller ----------------------------------------------------
+# Копируем ВЕСЬ пакет rl_controller (включая motion.pt внутри него)
+COPY --chown=0:0 ros2_ws/src/rl_controller /opt/go1_participant/ros2_ws/src/rl_controller
+
+# Сборка пакета rl_controller выполняется ОТ ROOT
 RUN source /opt/ros/humble/setup.bash \
     && cd /opt/go1_participant/ros2_ws \
-    && colcon build --packages-up-to safety_block --cmake-args -DCMAKE_BUILD_TYPE=Release
+    && colcon build \
+        --packages-select unitree_go safety_block rl_controller \
+        --cmake-args -DCMAKE_BUILD_TYPE=Release \
+        --symlink-install
+
+# Проверка наличия модели ПО ПРАВИЛЬНОМУ ПУТИ (внутри пакета)
+RUN test -f /opt/go1_participant/ros2_ws/src/rl_controller/rl_controller/motion.pt
 
 # Проверки на этапе сборки: интерфейсы unitree_go собрались, модель и пары
 # читаются, все 655 проверяемых пар на месте.

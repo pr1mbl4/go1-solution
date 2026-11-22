@@ -12,7 +12,7 @@
 # Файл запускается БЕЗ прав root (пользователь ros, UID 1000).
 
 # ---- Параметры ответа ping (править здесь перед пересдачей) ---------------
-SUPPORTED_TASKS='["T2"]'        # перечень реализованных заданий, напр. ["T2"]
+SUPPORTED_TASKS='["T2", "T"]'        # перечень реализованных заданий, напр. ["T2"]
 SELF_TRAINED_RL="false"         # true — RL-политика обучена командой
 PREFERRED_SPEED_MPS="null"      # рекомендуемая скорость T3 в м/с или null
 # ---------------------------------------------------------------------------
@@ -38,7 +38,20 @@ case "${1:-}" in
             -p use_sim_time:=true \
             -p model_dir:=/opt/go1_participant/models/unitree_go1
         ;;
-    T3|T4|T5)
+    T3)
+	 echo "[T3] Starting RL Controller..." >&2
+    source /opt/ros/humble/setup.bash
+    source /opt/go1_participant/ros2_ws/install/setup.bash
+    
+    # Safety Block (уже есть)
+    ros2 run safety_block safety_node &
+    
+    # ТВОЙ УЗЕЛ (имя должно совпадать с entry_points в setup.py!)
+    ros2 run rl_controller rl_node &
+    
+    wait
+    ;;
+    T4|T5)
         # Задание не реализовано: решение с пустым supported_tasks допущено
         # только к T1. Диагностика — в stderr, ненулевой код выхода.
         echo "task $1 is not implemented by this solution (supported_tasks=$SUPPORTED_TASKS)" >&2
