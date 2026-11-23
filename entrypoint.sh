@@ -12,7 +12,7 @@
 # Файл запускается БЕЗ прав root (пользователь ros, UID 1000).
 
 # ---- Параметры ответа ping (править здесь перед пересдачей) ---------------
-SUPPORTED_TASKS='["T2"]'        # перечень реализованных заданий, напр. ["T2"]
+SUPPORTED_TASKS='["T2", "T4"]'        # перечень реализованных заданий, напр. ["T2"]
 SELF_TRAINED_RL="false"         # true — RL-политика обучена командой
 PREFERRED_SPEED_MPS="null"      # рекомендуемая скорость T3 в м/с или null
 # ---------------------------------------------------------------------------
@@ -38,14 +38,41 @@ case "${1:-}" in
             -p use_sim_time:=true \
             -p model_dir:=/opt/go1_participant/models/unitree_go1
         ;;
-    T3|T4|T5)
-        # Задание не реализовано: решение с пустым supported_tasks допущено
-        # только к T1. Диагностика — в stderr, ненулевой код выхода.
-        echo "task $1 is not implemented by this solution (supported_tasks=$SUPPORTED_TASKS)" >&2
-        exit 69  # EX_UNAVAILABLE
+    T4)
+        source /opt/ros/humble/setup.bash
+        source /opt/go1_participant/ros2_ws/install/setup.bash
+
+        # 1. Dead reckoning (без TF, /odom_dead_reckoning)
+        /opt/go1_participant/ros2_ws/install/odometry/bin/odom_node \
+            --ros-args -p use_sim_time:=true -p publish_tf:=false \
+            &> /tmp/odom_node.log &
+
+        # 2. RTAB-Map визуальная одометрия (без TF, /visual_odom)
+        ros2 run rtabmap_odom rgbd_odometry --ros-args \
+            --remap odom:=/visual_odom \
+            --remap rgb/image:=/camera/image_raw \
+            --remap depth/image:=/camera/depth/image_raw \
+            --remap rgb/camera_info:=/camera/camera_info \
+            -p use_sim_time:=true \
+            -p frame_id:=trunk \
+            -p odom_frame_id:=odom \
+            -p publish_tf:=false \
+            -p subscribe_depth:=true \
+            -p subscribe_rgb:=true \
+            -p approx_sync:=true \
+            -p qos:=2 \
+            -p Odom/Strategy:=\"0\" \
+            -p Odom/FeatureType:=\"2\" \
+            -p Odom/MaxFeatures:=\"500\" \
+            &> /tmp/rtabmap.log &
+
+        # 3. EKF (TF odom -> trunk)
+        exec ros2 run robot_localization ekf_node --ros-args \
+            -p use_sim_time:=true \
+            --params-file /opt/go1_participant/ros2_ws/install/odometry/share/odometry/config/ekf.yaml
         ;;
-    *)
-        usage_to_stderr
-        exit 64  # EX_USAGE
+    T3|T5)
+        echo "Task $1: not implemented" >&2
+        exit 69
         ;;
 esac
