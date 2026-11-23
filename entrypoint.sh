@@ -42,12 +42,7 @@ case "${1:-}" in
         source /opt/ros/humble/setup.bash
         source /opt/go1_participant/ros2_ws/install/setup.bash
 
-        # 1. Dead reckoning (без TF, /odom_dead_reckoning)
-        /opt/go1_participant/ros2_ws/install/odometry/bin/odom_node \
-            --ros-args -p use_sim_time:=true -p publish_tf:=false \
-            &> /tmp/odom_node.log &
-
-        # 2. RTAB-Map визуальная одометрия (без TF, /visual_odom)
+        # 2. RTAB-Map визуальная одометрия
         ros2 run rtabmap_odom rgbd_odometry --ros-args \
             --remap odom:=/visual_odom \
             --remap rgb/image:=/camera/image_raw \
@@ -66,7 +61,7 @@ case "${1:-}" in
             -p Odom/MaxFeatures:=\"500\" \
             &> /tmp/rtabmap.log &
 
-        # 3. EKF (TF odom -> trunk)
+        # 3. EKF
         exec ros2 run robot_localization ekf_node --ros-args \
             -p use_sim_time:=true \
             --params-file /opt/go1_participant/ros2_ws/install/odometry/share/odometry/config/ekf.yaml
