@@ -24,8 +24,18 @@ SHELL ["/bin/bash", "-c"]
 # (ТЗ T2 п. 4.3: MuJoCo 3.3.7, Menagerie rev 0059d433); numpy < 2 требуется
 # самим mujoco 3.3.7. Сеть нужна только на этапе сборки.
 USER root
+RUN sed -i 's|http://archive.ubuntu.com|http://mirror.yandex.ru|g' /etc/apt/sources.list
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3-pip \
+    && apt-get install -y --no-install-recommends \
+        ros-humble-rtabmap-ros \
+        ros-humble-robot-localization \
+        ros-humble-image-transport \
+        ros-humble-cv-bridge \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3-pip \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m pip install --no-cache-dir "numpy<2" "mujoco==3.3.7"
 
@@ -40,7 +50,7 @@ COPY --chown=ros:ros models/unitree_go1 /opt/go1_participant/models/unitree_go1
 USER ros
 RUN source /opt/ros/humble/setup.bash \
     && cd /opt/go1_participant/ros2_ws \
-    && colcon build --packages-up-to safety_block --cmake-args -DCMAKE_BUILD_TYPE=Release
+    && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 # Проверки на этапе сборки: интерфейсы unitree_go собрались, модель и пары
 # читаются, все 655 проверяемых пар на месте.
