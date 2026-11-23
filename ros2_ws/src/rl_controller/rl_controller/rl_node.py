@@ -72,7 +72,7 @@ class RLControllerNode(Node):
             obs = np.zeros(self.num_obs, dtype=np.float32)
             
             ms = self.last_lowstate.motor_state
-            imu = self.last_lowstate.imu
+            imu = self.last_lowstate.imu_state
             
             # 0-2: Угловая скорость базы (gyroscope)
             obs[0:3] = [imu.gyroscope[0], imu.gyroscope[1], imu.gyroscope[2]]
