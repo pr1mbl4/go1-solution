@@ -19,22 +19,18 @@ ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 # Явный bash для RUN: ниже используется `source` (в dash его нет).
 SHELL ["/bin/bash", "-c"]
 
-# ---- T2: MuJoCo для проверки самоколлизий ---------------------------------
+# ---- T2: MuJoCo, T4: RTAB-Map и robot_localization -------------------------
 # Версия mujoco и модель Menagerie совпадают с судейской средой
 # (ТЗ T2 п. 4.3: MuJoCo 3.3.7, Menagerie rev 0059d433); numpy < 2 требуется
-# самим mujoco 3.3.7. Сеть нужна только на этапе сборки.
+# самим mujoco 3.3.7. RTAB-Map и robot_localization ставятся из репозиториев
+# ROS. Сеть нужна только на этапе сборки.
 USER root
-RUN sed -i 's|http://archive.ubuntu.com|http://mirror.yandex.ru|g' /etc/apt/sources.list
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ros-humble-rtabmap-ros \
         ros-humble-robot-localization \
         ros-humble-image-transport \
         ros-humble-cv-bridge \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
         python3-pip \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m pip install --no-cache-dir "numpy<2" "mujoco==3.3.7"
