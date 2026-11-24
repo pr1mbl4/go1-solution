@@ -39,10 +39,12 @@ case "${1:-}" in
             -p model_dir:=/opt/go1_participant/models/unitree_go1
         ;;
     T4)
+        # Одометрия: RTAB-Map по фронтальной RGB-D -> гейт покоя -> EKF.
+        # Выход фильтра ремапится в /odom, судья читает только его (ТЗ 6.2).
         source /opt/ros/humble/setup.bash
         source /opt/go1_participant/ros2_ws/install/setup.bash
 
-        # 2. RTAB-Map визуальная одометрия
+        # RTAB-Map визуальная одометрия
         ros2 run rtabmap_odom rgbd_odometry --ros-args \
             --remap odom:=/visual_odom \
             --remap rgb/image:=/camera/image_raw \
@@ -61,13 +63,23 @@ case "${1:-}" in
             -p Odom/MaxFeatures:=\"500\" \
             &> /tmp/rtabmap.log &
 
-        # 3. EKF
+        # Гейт покоя: удерживает позу, пока робот стоит
+        ros2 run odometry odom_gate --ros-args \
+            -p use_sim_time:=true \
+            &> /tmp/odom_gate.log &
+
+        # EKF: вход - /visual_odom_gated, выход - /odom + TF odom -> trunk
         exec ros2 run robot_localization ekf_node --ros-args \
             -p use_sim_time:=true \
-            --params-file /opt/go1_participant/ros2_ws/install/odometry/share/odometry/config/ekf.yaml
+            --params-file /opt/go1_participant/ros2_ws/install/odometry/share/odometry/config/ekf.yaml \
+            --remap odometry/filtered:=/odom
         ;;
     T3|T5)
         echo "Task $1: not implemented" >&2
         exit 69
+        ;;
+    *)
+        usage_to_stderr
+        exit 64  # EX_USAGE
         ;;
 esac

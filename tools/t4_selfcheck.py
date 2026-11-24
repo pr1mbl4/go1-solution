@@ -59,7 +59,7 @@ class T4Selfcheck(Node):
             self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
 
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
-        self.create_subscription(Odometry, '/odometry/filtered', self.on_filtered, qos)
+        self.create_subscription(Odometry, '/odom', self.on_filtered, qos)
         self.create_subscription(Odometry, '/odom/ground_truth', self.on_gt, qos)
 
     def on_filtered(self, msg):
@@ -140,7 +140,7 @@ def main():
     else:
         print('MODE: submission (no /cmd_vel, Judge drives)')
 
-    print('Waiting for /odometry/filtered and /odom/ground_truth...')
+    print('Waiting for /odom and /odom/ground_truth...')
     start = time.time()
     while node.filtered is None or node.ground_truth is None:
         if time.time() - start > 15.0:
