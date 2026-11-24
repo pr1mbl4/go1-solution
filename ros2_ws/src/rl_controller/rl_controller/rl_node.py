@@ -1,162 +1,246 @@
+import os
+import pickle
+import io
+import numpy as np
+import torch
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
 from unitree_go.msg import LowState, LowCmd
-import numpy as np
-import torch
-import os
+
+
+def class_to_dict(obj):
+    if not hasattr(obj, "__dict__"):
+        return obj
+    result = {}
+    for key in dir(obj):
+        if key.startswith("_") or key == "terrain":
+            continue
+        val = getattr(obj, key)
+        result[key] = [class_to_dict(v) for v in val] if isinstance(val, list) else class_to_dict(val)
+    return result
+
+
+class CPU_Unpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if module == 'torch.storage' and name == '_load_from_bytes':
+            return lambda b: torch.load(io.BytesIO(b), map_location='cpu')
+        return super().find_class(module, name)
+
 
 class RLControllerNode(Node):
     def __init__(self):
         super().__init__('rl_controller')
-        
-        # --- 1. Загрузка модели ---
-        pkg_dir = os.path.dirname(os.path.abspath(__file__))
-        model_path = os.path.join(pkg_dir, 'motion.pt')
-        if not os.path.exists(model_path):
-            self.get_logger().error(f"Модель не найдена: {model_path}")
-            raise FileNotFoundError(model_path)
-            
-        self.device = torch.device('cpu')
-        # Используем jit.load для .pt файлов от RSL_RL/LeggedGym
+
+        wtw_dir = os.path.join(get_package_share_directory('rl_controller'), 'wtw')
+
+        # --- 1. Конфиг ---
+        pkl_path = os.path.join(wtw_dir, 'parameters.pkl')
+        self.get_logger().info(f"Загрузка конфига из {pkl_path}...")
         try:
-            self.policy = torch.jit.load(model_path, map_location=self.device)
-            self.policy.eval()
-            self.get_logger().info("RL Policy загружена успешно")
-        except Exception as e:
-            self.get_logger().error(f"Ошибка загрузки модели: {e}")
-            raise e
+            pkl_cfg = torch.load(pkl_path, map_location='cpu', weights_only=False)
+        except Exception:
+            with open(pkl_path, 'rb') as f:
+                pkl_cfg = CPU_Unpickler(f).load()
 
-        # --- 2. Подписки ---
-        qos_lowstate = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
-        self.lowstate_sub = self.create_subscription(
-            LowState, '/lowstate', self.lowstate_callback, qos_lowstate
-        )
-        
-        qos_cmd_vel = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
-        self.cmd_vel_sub = self.create_subscription(
-            Twist, '/cmd_vel', self.cmd_vel_callback, qos_cmd_vel
-        )
-        
-        # --- 3. Публикация ---
-        qos_bare = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
-        self.lowcmd_pub = self.create_publisher(LowCmd, '/lowcmd_bare', qos_bare)
-        
-        # --- 4. Параметры среды (Go1 / G1 Config) ---
-        # Дефолтная поза Go1 (из unitree_rl_gym / legged_gym)
-        self.default_dof_pos = np.array([
-            0.0, 0.8536, -1.7072,  # FR
-            0.0, 0.8536, -1.7072,  # FL
-            0.0, 0.8536, -1.7072,  # RR
-            0.0, 0.8536, -1.7072   # RL
-        ], dtype=np.float32)
-        
-        # Размерности (теперь 47, как требует модель)
-        self.num_obs = 47 
-        self.num_actions = 12
-        
-        # Масштаб действий (КРИТИЧЕСКИ ВАЖНО, берем из g1_config.py)
-        self.action_scale = 0.25
-        
-        # PD коэффициенты (берем усредненные/стандартные для Go1, 
-        # в g1_config они другие, но для Go1 в симуляторе нужны такие)
-        self.kp = 40.0
-        self.kd = 2.0
-        
-        # Состояние
+        cfg = pkl_cfg['Cfg'] if isinstance(pkl_cfg, dict) and 'Cfg' in pkl_cfg else pkl_cfg
+        cfg = class_to_dict(cfg)
+        self.cfg = cfg
+
+        env = cfg.get('env', {})
+        ctl = cfg.get('control', {})
+        norm = cfg.get('normalization', {})
+
+        default_scales = {
+            'lin_vel': 2.0, 'ang_vel': 0.25, 'dof_pos': 1.0, 'dof_vel': 0.05,
+            'body_height_cmd': 1.0, 'footswing_height_cmd': 1.0,
+            'body_pitch_cmd': 1.0, 'body_roll_cmd': 1.0,
+            'stance_width_cmd': 1.0, 'stance_length_cmd': 1.0, 'aux_reward_cmd': 1.0
+        }
+        loaded_scales = cfg.get('obs_scales', norm.get('obs_scales', {}))
+        self.obs_scales = {**default_scales, **loaded_scales}
+
+        self.num_obs = env.get('num_observations', 70)
+        self.hist_len = env.get('num_observation_history', 30)
+        self.num_commands = cfg.get('commands', {}).get('num_commands', 15)
+        self.clip = norm.get('clip_actions', 100.0)
+        self.action_scale = ctl.get('action_scale', 0.25)
+        self.hip_red = ctl.get('hip_scale_reduction', 0.5)
+        self.dt = ctl.get('decimation', 4) * cfg.get('sim', {}).get('dt', 0.005)
+
+        self.two_prev = env.get('observe_two_prev_actions', True)
+        self.use_clock = env.get('observe_clock_inputs', True)
+        self.observe_vel = env.get('observe_vel', False)
+
+        cs = self.obs_scales
+        self.commands_scale = np.array([
+            cs['lin_vel'], cs['lin_vel'], cs['ang_vel'], cs.get('body_height_cmd', 1.0),
+            1, 1, 1, 1, 1,
+            cs.get('footswing_height_cmd', 1.0), cs.get('body_pitch_cmd', 1.0), cs.get('body_roll_cmd', 1.0),
+            cs.get('stance_width_cmd', 1.0), cs.get('stance_length_cmd', 1.0), cs.get('aux_reward_cmd', 1.0),
+            1, 1, 1, 1, 1, 1
+        ])[:self.num_commands]
+
+        # --- 2. Суставы ---
+        joint_names = [
+            "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
+            "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
+            "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
+            "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint"
+        ]
+        angles = cfg.get('init_state', {}).get('default_joint_angles', {})
+        default_angles_map = {
+            'FL_hip_joint': 0.1, 'FL_thigh_joint': 0.8, 'FL_calf_joint': -1.5,
+            'FR_hip_joint': -0.1, 'FR_thigh_joint': 0.8, 'FR_calf_joint': -1.5,
+            'RL_hip_joint': 0.1, 'RL_thigh_joint': 1.0, 'RL_calf_joint': -1.5,
+            'RR_hip_joint': -0.1, 'RR_thigh_joint': 1.0, 'RR_calf_joint': -1.5
+        }
+        final_angles = {**default_angles_map, **angles}
+        self.default_gym = np.array([final_angles[n] for n in joint_names], dtype=np.float32)
+
+        stiffness = ctl.get('stiffness', {'joint': 20.0})
+        damping = ctl.get('damping', {'joint': 0.5})
+        self.p_gains = np.zeros(12)
+        self.d_gains = np.zeros(12)
+        for i, name in enumerate(joint_names):
+            for dof in stiffness:
+                if dof in name:
+                    self.p_gains[i] = stiffness[dof]
+                    self.d_gains[i] = damping[dof]
+
+        self.gym_to_ros = np.array([3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8])
+        self.ros_to_gym = self.gym_to_ros.copy()
+
+        # --- 3. Модели ---
+        self.body = torch.jit.load(os.path.join(wtw_dir, 'body_latest.jit'), map_location='cpu').eval()
+        self.adapt = torch.jit.load(os.path.join(wtw_dir, 'adaptation_module_latest.jit'), map_location='cpu').eval()
+
+        # --- 4. Состояние ---
+        self.obs_history = torch.zeros(1, self.hist_len * self.num_obs)
+        self.actions = torch.zeros(12)
+        self.last_actions = torch.zeros(12)
+        self.gait_indices = 0.0
+        self.clock = torch.zeros(1, 4)
+
+        self.commands = np.zeros(self.num_commands)
+        if self.num_commands > 4: self.commands[4] = 2.5
+        if self.num_commands > 5: self.commands[5] = 0.5
+        if self.num_commands > 8: self.commands[8] = 0.5
+        if self.num_commands > 9: self.commands[9] = 0.08
+
         self.last_lowstate = None
-        self.target_speed_x = 0.0
-        self.prev_actions = np.zeros(self.num_actions, dtype=np.float32)
-        
-        # Частота управления RL (обычно 50 Гц -> 0.02 сек)
-        self.timer = self.create_timer(0.02, self.control_loop) 
-        self.get_logger().info("RL Controller запущен (47 obs, LSTM)")
+        self.vx = 0.0
+        self.loop_count = 0
 
-    def cmd_vel_callback(self, msg):
-        self.target_speed_x = float(msg.linear.x)
+        self.create_subscription(LowState, '/lowstate', self.cb_state, QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
+        self.create_subscription(Twist, '/cmd_vel', self.cb_cmd, QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE))
+        self.pub = self.create_publisher(LowCmd, '/lowcmd_bare', QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
 
-    def lowstate_callback(self, msg):
+        self.create_timer(self.dt, self.control_loop)
+        self.get_logger().info(f'WTW Ready: obs={self.num_obs}, hist={self.hist_len}, cmds={self.num_commands}, dt={self.dt:.3f}')
+
+    def cb_cmd(self, msg):
+        self.vx = float(msg.linear.x)
+
+    def cb_state(self, msg):
         self.last_lowstate = msg
 
     def control_loop(self):
         if self.last_lowstate is None:
             return
-            
         try:
-            # --- Сборка Observation Vector (47 элементов) ---
-            obs = np.zeros(self.num_obs, dtype=np.float32)
             ms = self.last_lowstate.motor_state
             imu = self.last_lowstate.imu_state
-            
-            # 0-2: Угловая скорость базы (gyroscope)
-            # В ROS2 LowState gyroscope - это [x, y, z]
-            obs[0:3] = [imu.gyroscope[0], imu.gyroscope[1], imu.gyroscope[2]]
-            
-            # 3-5: Проекция гравитации (из кватерниона)
-            # Кватернион в LowState: [x, y, z, w]
-            q = imu.quaternion 
-            x, y, z, w = q[0], q[1], q[2], q[3]
-            
-            # R_base_world @ [0, 0, -1]
-            obs[3] = 2.0 * (x * z - w * y)
-            obs[4] = 2.0 * (y * z + w * x)
-            obs[5] = 1.0 - 2.0 * (x * x + y * y)
-            
-            # 6-8: Команды скорости (нормализованные)
-            # Обычно в legged_gym команды нормализуются на max_vel (2.0 для lin, 2*pi для ang)
-            obs[6] = self.target_speed_x / 2.0
-            obs[7] = 0.0 # linear.y
-            obs[8] = 0.0 # angular.z
-            
-            # 9-20: Позиции суставов (dof_pos)
-            for i in range(12):
-                obs[9 + i] = ms[i].q
-                
-            # 21-32: Скорости суставов (dof_vel)
-            for i in range(12):
-                obs[21 + i] = ms[i].dq
-                
-            # 33-44: Предыдущие действия (prev_actions)
-            obs[33:45] = self.prev_actions
-            
-            # 45-46: Дополнительные признаки (обычно base_lin_vel x, y)
-            # Так как в /lowstate нет одометрии, ставим 0. 
-            # Модель должна быть робастна к этому, либо это были другие признаки.
-            obs[45] = 0.0 
-            obs[46] = 0.0
-            
-            # --- Инференс ---
+
+            q_ros = np.array([ms[i].q for i in range(12)], dtype=np.float32)
+            dq_ros = np.array([ms[i].dq for i in range(12)], dtype=np.float32)
+            q = q_ros[self.ros_to_gym]
+            dq = dq_ros[self.ros_to_gym]
+
+            # Автоопределение порядка кватерниона: [w,x,y,z] (Unitree) или [x,y,z,w] (ROS)
+            q4 = imu.quaternion
+            if abs(q4[0]) >= abs(q4[3]):
+                w, x, y, z = q4[0], q4[1], q4[2], q4[3]
+            else:
+                w, x, y, z = q4[3], q4[0], q4[1], q4[2]
+
+            # projected gravity = R^T @ [0,0,-1]; СТОЯ = [0,0,-1] (как в legged_gym)
+            gravity = np.array([
+                -2.0 * (x * z - w * y),
+                -2.0 * (y * z + w * x),
+                -(1.0 - 2.0 * (x * x + y * y))
+            ], dtype=np.float32)
+
+            self.commands[0] = self.vx
+            cmd_scaled = (self.commands * self.commands_scale).reshape(1, -1)
+
+            ob = np.concatenate((
+                gravity.reshape(1, -1),
+                cmd_scaled,
+                ((q - self.default_gym) * self.obs_scales['dof_pos']).reshape(1, -1),
+                (dq * self.obs_scales['dof_vel']).reshape(1, -1),
+                torch.clip(self.actions, -self.clip, self.clip).numpy().reshape(1, -1)
+            ), axis=1)
+
+            if self.two_prev:
+                ob = np.concatenate((ob, self.last_actions.numpy().reshape(1, -1)), axis=1)
+            if self.use_clock:
+                ob = np.concatenate((ob, self.clock.numpy()), axis=1)
+            if self.observe_vel:
+                ob = np.concatenate((np.zeros((1, 3)), (np.array(imu.gyroscope) * self.obs_scales['ang_vel']).reshape(1, -1), ob), axis=1)
+
+            obs_tensor = torch.tensor(ob, dtype=torch.float32)
+            if obs_tensor.shape[1] != self.num_obs:
+                self.get_logger().error(f'Obs mismatch: {obs_tensor.shape[1]} vs {self.num_obs}', throttle_duration_sec=5.0)
+                return
+
+            self.obs_history = torch.cat((self.obs_history[:, self.num_obs:], obs_tensor), dim=-1)
+
             with torch.no_grad():
-                obs_tensor = torch.from_numpy(obs).unsqueeze(0).to(self.device)
-                # Модель с LSTM внутри сама обновляет свое скрытое состояние
-                actions_tensor = self.policy(obs_tensor)
-                actions = actions_tensor.cpu().numpy()[0]
-                
-            # Сохраняем действия для следующего шага
-            self.prev_actions = actions.copy()
-            
-            # --- Формирование LowCmd ---
-            # target_q = default_pos + action * action_scale
-            target_q = self.default_dof_pos + actions * self.action_scale
-            
-            cmd_msg = LowCmd()
-            cmd_msg.head = [0xFE, 0xEF]
-            cmd_msg.level_flag = 0xFF
-            
+                latent = self.adapt(self.obs_history)
+                act = self.body(torch.cat((self.obs_history, latent), dim=-1))
+
+            self.last_actions = self.actions.clone()
+            self.actions = torch.clip(act[0], -self.clip, self.clip)
+
+            target = self.actions.numpy() * self.action_scale
+            target[[0, 3, 6, 9]] *= self.hip_red
+            target = target + self.default_gym
+            q_ros_target = target[self.gym_to_ros]
+
+            cmd = LowCmd()
+            cmd.head = [0xFE, 0xEF]
+            cmd.level_flag = 0xFF
             for i in range(12):
-                motor = cmd_msg.motor_cmd[i]
-                motor.mode = 0x0A # SERVO mode
-                motor.q = float(target_q[i])
-                motor.dq = 0.0
-                motor.tau = 0.0
-                motor.kp = self.kp
-                motor.kd = self.kd
-                
-            self.lowcmd_pub.publish(cmd_msg)
-            
+                m = cmd.motor_cmd[i]
+                m.mode = 0x0A
+                m.q = float(q_ros_target[i])
+                m.dq = 0.0
+                m.tau = 0.0
+                gym_idx = self.ros_to_gym[i]
+                m.kp = float(self.p_gains[gym_idx])
+                m.kd = float(self.d_gains[gym_idx])
+            self.pub.publish(cmd)
+
+            if self.use_clock and self.num_commands > 8:
+                f, ph, off, bd = self.commands[4], self.commands[5], self.commands[6], self.commands[7]
+                self.gait_indices = (self.gait_indices + self.dt * f) % 1.0
+                gi = self.gait_indices
+                fi = [gi + ph + off + bd, gi + off, gi + bd, gi + ph]
+                self.clock = torch.sin(2 * np.pi * torch.tensor(fi)).reshape(1, 4)
+
+            # Отладочный лог раз в секунду: стоя gravity должен быть ~[0,0,-1]
+            self.loop_count += 1
+            if self.loop_count % 50 == 1:
+                self.get_logger().info(
+                    f'debug: g={np.round(gravity, 2)} q4={np.round(np.array(q4), 2)} '
+                    f'vx={self.vx:.2f} act={np.round(self.actions.numpy()[:3], 2)}')
+
         except Exception as e:
-            self.get_logger().error(f"Ошибка в control_loop: {e}")
+            self.get_logger().error(f'Loop error: {e}', throttle_duration_sec=2.0)
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -168,6 +252,7 @@ def main(args=None):
     finally:
         node.destroy_node()
         rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

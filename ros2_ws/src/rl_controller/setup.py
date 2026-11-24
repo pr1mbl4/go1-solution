@@ -11,9 +11,8 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        # Копируем motion.pt и g1_config.py в ту же папку, где будет лежать скрипт
-        (os.path.join('lib', package_name), glob('rl_controller/motion.pt')),
-        (os.path.join('lib', package_name), glob('rl_controller/g1_config.py')),
+        # Копируем веса и конфиг в share/rl_controller/wtw
+        (os.path.join('share', package_name, 'wtw'), glob('rl_controller/wtw/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
