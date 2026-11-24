@@ -100,15 +100,10 @@ class RLControllerNode(Node):
         final_angles = {**default_angles_map, **angles}
         self.default_gym = np.array([final_angles[n] for n in joint_names], dtype=np.float32)
 
-        stiffness = ctl.get('stiffness', {'joint': 20.0})
-        damping = ctl.get('damping', {'joint': 0.5})
-        self.p_gains = np.zeros(12)
-        self.d_gains = np.zeros(12)
-        for i, name in enumerate(joint_names):
-            for dof in stiffness:
-                if dof in name:
-                    self.p_gains[i] = stiffness[dof]
-                    self.d_gains[i] = damping[dof]
+        # --- ИСПРАВЛЕНИЕ: Увеличиваем жёсткость для MuJoCo ---
+        # Используем значения, близкие к STAND_KP/KD из safety_block, чтобы робот уверенно стоял и шел
+        self.p_gains = np.full(12, 40.0, dtype=np.float32)
+        self.d_gains = np.full(12, 2.0, dtype=np.float32)
 
         self.gym_to_ros = np.array([3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8])
         self.ros_to_gym = self.gym_to_ros.copy()
@@ -159,14 +154,12 @@ class RLControllerNode(Node):
             q = q_ros[self.ros_to_gym]
             dq = dq_ros[self.ros_to_gym]
 
-            # Автоопределение порядка кватерниона: [w,x,y,z] (Unitree) или [x,y,z,w] (ROS)
             q4 = imu.quaternion
             if abs(q4[0]) >= abs(q4[3]):
                 w, x, y, z = q4[0], q4[1], q4[2], q4[3]
             else:
                 w, x, y, z = q4[3], q4[0], q4[1], q4[2]
 
-            # projected gravity = R^T @ [0,0,-1]; СТОЯ = [0,0,-1] (как в legged_gym)
             gravity = np.array([
                 -2.0 * (x * z - w * y),
                 -2.0 * (y * z + w * x),
@@ -231,12 +224,10 @@ class RLControllerNode(Node):
                 fi = [gi + ph + off + bd, gi + off, gi + bd, gi + ph]
                 self.clock = torch.sin(2 * np.pi * torch.tensor(fi)).reshape(1, 4)
 
-            # Отладочный лог раз в секунду: стоя gravity должен быть ~[0,0,-1]
+            # Отладочный лог раз в 2 секунды
             self.loop_count += 1
-            if self.loop_count % 50 == 1:
-                self.get_logger().info(
-                    f'debug: g={np.round(gravity, 2)} q4={np.round(np.array(q4), 2)} '
-                    f'vx={self.vx:.2f} act={np.round(self.actions.numpy()[:3], 2)}')
+            if self.loop_count % 100 == 1:
+                self.get_logger().info(f'debug: vx={self.vx:.2f} g_z={gravity[2]:.2f} yaw_q={q4[3 if abs(q4[0])>=abs(q4[3]) else 0]:.2f}')
 
         except Exception as e:
             self.get_logger().error(f'Loop error: {e}', throttle_duration_sec=2.0)
