@@ -66,7 +66,9 @@ class RLControllerNode(Node):
         self.hist_len = env.get('num_observation_history', 30)
         self.num_commands = cfg.get('commands', {}).get('num_commands', 15)
         self.clip = norm.get('clip_actions', 100.0)
-        self.action_scale = ctl.get('action_scale', 0.25)
+        
+        self.action_scale = 0.18 
+        
         self.hip_red = ctl.get('hip_scale_reduction', 0.5)
         self.dt = ctl.get('decimation', 4) * cfg.get('sim', {}).get('dt', 0.005)
 
@@ -92,21 +94,20 @@ class RLControllerNode(Node):
         ]
         angles = cfg.get('init_state', {}).get('default_joint_angles', {})
         default_angles_map = {
-            'FL_hip_joint': 0.1, 'FL_thigh_joint': 0.8, 'FL_calf_joint': -1.5,
-            'FR_hip_joint': -0.1, 'FR_thigh_joint': 0.8, 'FR_calf_joint': -1.5,
-            'RL_hip_joint': 0.1, 'RL_thigh_joint': 1.0, 'RL_calf_joint': -1.5,
-            'RR_hip_joint': -0.1, 'RR_thigh_joint': 1.0, 'RR_calf_joint': -1.5
+            'FL_hip_joint': -0.1, 'FL_thigh_joint': 0.8, 'FL_calf_joint': -1.5,
+            'FR_hip_joint': 0.1, 'FR_thigh_joint': 0.8, 'FR_calf_joint': -1.5,
+            'RL_hip_joint': -0.1, 'RL_thigh_joint': 1.0, 'RL_calf_joint': -1.5,
+            'RR_hip_joint': 0.1, 'RR_thigh_joint': 1.0, 'RR_calf_joint': -1.5
         }
         final_angles = {**default_angles_map, **angles}
         self.default_gym = np.array([final_angles[n] for n in joint_names], dtype=np.float32)
 
-        # --- ИСПРАВЛЕНИЕ: Увеличиваем жёсткость для MuJoCo ---
-        # Используем значения, близкие к STAND_KP/KD из safety_block, чтобы робот уверенно стоял и шел
         self.p_gains = np.full(12, 40.0, dtype=np.float32)
         self.d_gains = np.full(12, 2.0, dtype=np.float32)
 
+        # Маппинг: Gym(FL,FR,RL,RR) -> ROS(FR,FL,RR,RL)
         self.gym_to_ros = np.array([3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8])
-        self.ros_to_gym = self.gym_to_ros.copy()
+        self.ros_to_gym = np.array([3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8])
 
         # --- 3. Модели ---
         self.body = torch.jit.load(os.path.join(wtw_dir, 'body_latest.jit'), map_location='cpu').eval()
@@ -128,13 +129,20 @@ class RLControllerNode(Node):
         self.last_lowstate = None
         self.vx = 0.0
         self.loop_count = 0
+        
+        self.vel_threshold = 0.05
+        
+        # Yaw Stabilization: Дифференциальный коэффициент
+        # Если yaw < 0 (вправо), нужно повернуть влево.
+        # Левые ноги (0, 6) +, Правые ноги (3, 9) -
+        self.yaw_kp = 0.5 
 
         self.create_subscription(LowState, '/lowstate', self.cb_state, QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.create_subscription(Twist, '/cmd_vel', self.cb_cmd, QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE))
         self.pub = self.create_publisher(LowCmd, '/lowcmd_bare', QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
 
         self.create_timer(self.dt, self.control_loop)
-        self.get_logger().info(f'WTW Ready: obs={self.num_obs}, hist={self.hist_len}, cmds={self.num_commands}, dt={self.dt:.3f}')
+        self.get_logger().info(f'WTW Ready: obs={self.num_obs}, hist={self.hist_len}, cmds={self.num_commands}, dt={self.dt:.3f}, scale={self.action_scale}')
 
     def cb_cmd(self, msg):
         self.vx = float(msg.linear.x)
@@ -166,6 +174,38 @@ class RLControllerNode(Node):
                 -(1.0 - 2.0 * (x * x + y * y))
             ], dtype=np.float32)
 
+            # Вычисляем текущий yaw
+            siny_cosp = 2.0 * (w * z + x * y)
+            cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+            current_yaw = np.arctan2(siny_cosp, cosy_cosp)
+
+            # --- ЛОГИКА "СТОЯТЬ ИЛИ ИДТИ" ---
+            if abs(self.vx) < self.vel_threshold:
+                target = self.default_gym.copy()
+                self.actions = torch.zeros(12)
+                self.last_actions = torch.zeros(12)
+                
+                q_ros_target = target[self.gym_to_ros]
+                cmd = LowCmd()
+                cmd.head = [0xFE, 0xEF]
+                cmd.level_flag = 0xFF
+                for i in range(12):
+                    m = cmd.motor_cmd[i]
+                    m.mode = 0x0A
+                    m.q = float(q_ros_target[i])
+                    m.dq = 0.0
+                    m.tau = 0.0
+                    gym_idx = self.ros_to_gym[i]
+                    m.kp = float(self.p_gains[gym_idx])
+                    m.kd = float(self.d_gains[gym_idx])
+                self.pub.publish(cmd)
+                
+                self.loop_count += 1
+                if self.loop_count % 100 == 1:
+                    self.get_logger().info(f'debug: STANDING vx={self.vx:.2f} g_z={gravity[2]:.2f}')
+                return
+
+            # --- РЕЖИМ ДВИЖЕНИЯ ---
             self.commands[0] = self.vx
             cmd_scaled = (self.commands * self.commands_scale).reshape(1, -1)
 
@@ -199,6 +239,21 @@ class RLControllerNode(Node):
             self.actions = torch.clip(act[0], -self.clip, self.clip)
 
             target = self.actions.numpy() * self.action_scale
+            
+            # --- DIFFERENTIAL YAW STABILIZATION ---
+            # Если yaw < 0 (дрейф вправо), current_yaw отрицательный.
+            # Нам нужно повернуть влево.
+            # correction = kp * (-current_yaw) -> положительное значение.
+            # Левые ноги (0, 6) += correction
+            # Правые ноги (3, 9) -= correction
+            yaw_error = -current_yaw 
+            correction = self.yaw_kp * yaw_error
+            
+            target[0] += correction  # FL_hip
+            target[6] += correction  # RL_hip
+            target[3] -= correction  # FR_hip
+            target[9] -= correction  # RR_hip
+            
             target[[0, 3, 6, 9]] *= self.hip_red
             target = target + self.default_gym
             q_ros_target = target[self.gym_to_ros]
@@ -224,10 +279,9 @@ class RLControllerNode(Node):
                 fi = [gi + ph + off + bd, gi + off, gi + bd, gi + ph]
                 self.clock = torch.sin(2 * np.pi * torch.tensor(fi)).reshape(1, 4)
 
-            # Отладочный лог раз в 2 секунды
             self.loop_count += 1
             if self.loop_count % 100 == 1:
-                self.get_logger().info(f'debug: vx={self.vx:.2f} g_z={gravity[2]:.2f} yaw_q={q4[3 if abs(q4[0])>=abs(q4[3]) else 0]:.2f}')
+                self.get_logger().info(f'debug: WALKING vx={self.vx:.2f} g_z={gravity[2]:.2f} yaw={current_yaw:.2f} corr={correction:.3f}')
 
         except Exception as e:
             self.get_logger().error(f'Loop error: {e}', throttle_duration_sec=2.0)
