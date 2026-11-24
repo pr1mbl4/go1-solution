@@ -11,7 +11,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/config',
-            ['config/rtabmap_odom.yaml', 'config/ekf.yaml']),
+            ['config/ekf.yaml']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -22,7 +22,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'cmd_vel_test_publisher = odometry.cmd_vel_test_publisher:main',
+            'odom_gate = odometry.odom_gate:main',
         ],
     },
 )
