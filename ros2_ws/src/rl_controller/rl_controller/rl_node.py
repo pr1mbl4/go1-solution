@@ -136,7 +136,9 @@ class RLControllerNode(Node):
         self.yaw_cmd = 0.0
 
         self.create_subscription(LowState, '/lowstate', self.cb_state, QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
-        self.create_subscription(Twist, '/cmd_vel', self.cb_cmd, QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE))
+        # best-effort-читатель принимает издателя с любой надёжностью,
+        # reliable-читатель — только reliable: Judge может публиковать и так
+        self.create_subscription(Twist, '/cmd_vel', self.cb_cmd, QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.pub = self.create_publisher(LowCmd, '/lowcmd_bare', QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
 
         self.create_timer(self.dt, self.control_loop)
@@ -161,10 +163,10 @@ class RLControllerNode(Node):
             dq = dq_ros[self.ros_to_gym]
 
             q4 = imu.quaternion
-            if abs(q4[0]) >= abs(q4[3]):
-                w, x, y, z = q4[0], q4[1], q4[2], q4[3]
-            else:
-                w, x, y, z = q4[3], q4[0], q4[1], q4[2]
+            # Издатель /lowstate в этой среде один — симулятор; порядок
+            # компонент всегда (w, x, y, z). Эвристика «угадать порядок по
+            # модулю» на ходу переворачивает кватернион и рвёт gravity/yaw.
+            w, x, y, z = q4[0], q4[1], q4[2], q4[3]
 
             gravity = np.array([
                 -2.0 * (x * z - w * y),
