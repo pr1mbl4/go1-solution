@@ -35,6 +35,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m pip install --no-cache-dir "numpy<2" "mujoco==3.3.7"
 
+# ---- T3: инференс RL-политики -----------------------------------------------
+# torch только для CPU: интернета во время испытаний нет, CUDA не используется.
+# Пины packaging/setuptools — требования колёс torch CPU без конфликтов версий.
+RUN python3 -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+    && python3 -m pip install --no-cache-dir --force-reinstall "packaging<24" "setuptools<70"
+
 # ---- Рабочее пространство участника ----------------------------------------
 # Путь совпадает с конвенцией публичного симулятора (/opt/go1_participant/...),
 # чтобы локальные проверки находили unitree_go без дополнительных настроек.
@@ -49,11 +55,14 @@ RUN source /opt/ros/humble/setup.bash \
     && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 # Проверки на этапе сборки: интерфейсы unitree_go собрались, модель и пары
-# читаются, все 655 проверяемых пар на месте.
+# читаются, все 655 проверяемых пар на месте; веса RL-политики установлены
+# в share пакета (оттуда их читает rl_node) и torch импортируется.
 RUN source /opt/ros/humble/setup.bash \
     && source /opt/go1_participant/ros2_ws/install/setup.bash \
     && python3 -c "from unitree_go.msg import LowCmd, LowState; assert len(LowCmd().motor_cmd) == 20" \
-    && python3 -c "from safety_block.collision import CollisionChecker; c = CollisionChecker('/opt/go1_participant/models/unitree_go1'); assert len(c.pairs) == 655, len(c.pairs)"
+    && python3 -c "from safety_block.collision import CollisionChecker; c = CollisionChecker('/opt/go1_participant/models/unitree_go1'); assert len(c.pairs) == 655, len(c.pairs)" \
+    && python3 -c "import torch" \
+    && test -f /opt/go1_participant/ros2_ws/install/rl_controller/share/rl_controller/wtw/body_latest.jit
 
 # Контракт запуска: исполняемый /entrypoint.sh в корне файловой системы.
 USER root

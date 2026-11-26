@@ -12,9 +12,9 @@
 # Файл запускается БЕЗ прав root (пользователь ros, UID 1000).
 
 # ---- Параметры ответа ping (править здесь перед пересдачей) ---------------
-SUPPORTED_TASKS='["T2", "T4"]'        # перечень реализованных заданий, напр. ["T2"]
+SUPPORTED_TASKS='["T2", "T3", "T4"]'  # перечень реализованных заданий, напр. ["T2"]
 SELF_TRAINED_RL="false"         # true — RL-политика обучена командой
-PREFERRED_SPEED_MPS="null"      # рекомендуемая скорость T3 в м/с или null
+PREFERRED_SPEED_MPS="0.3"       # рекомендуемая скорость T3 в м/с или null
 # ---------------------------------------------------------------------------
 
 usage_to_stderr() {
@@ -37,6 +37,25 @@ case "${1:-}" in
         exec ros2 run safety_block safety_node --ros-args \
             -p use_sim_time:=true \
             -p model_dir:=/opt/go1_participant/models/unitree_go1
+        ;;
+    T3)
+        # Ходьба: RL-политика -> /lowcmd_bare -> Safety Block -> /lowcmd.
+        # use_sim_time у обоих узлов: частота инференса и watchdog по /clock.
+        source /opt/ros/humble/setup.bash
+        source /opt/go1_participant/ros2_ws/install/setup.bash
+
+        # Safety Block: проверки T2, публикация /lowcmd >= 50 Гц
+        ros2 run safety_block safety_node --ros-args \
+            -p use_sim_time:=true \
+            -p model_dir:=/opt/go1_participant/models/unitree_go1 \
+            &> /tmp/safety_block.log &
+
+        # RL-политика: /lowstate + /cmd_vel -> /lowcmd_bare
+        ros2 run rl_controller rl_node --ros-args \
+            -p use_sim_time:=true \
+            &> /tmp/rl_controller.log &
+
+        wait
         ;;
     T4)
         # Одометрия: RTAB-Map по фронтальной RGB-D -> гейт покоя -> EKF.
@@ -74,9 +93,11 @@ case "${1:-}" in
             --params-file /opt/go1_participant/ros2_ws/install/odometry/share/odometry/config/ekf.yaml \
             --remap odometry/filtered:=/odom
         ;;
-    T3|T5)
-        echo "Task $1: not implemented" >&2
-        exit 69
+    T5)
+        # Задание не реализовано: решение с пустым supported_tasks допущено
+        # только к T1. Диагностика — в stderr, ненулевой код выхода.
+        echo "task $1 is not implemented by this solution (supported_tasks=$SUPPORTED_TASKS)" >&2
+        exit 69  # EX_UNAVAILABLE
         ;;
     *)
         usage_to_stderr
