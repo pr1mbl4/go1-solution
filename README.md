@@ -8,8 +8,8 @@ GitHub: https://github.com/pr1mbl4/go1-solution
 Взаимодействие — через публичные интерфейсы ROS 2 (Humble, CycloneDDS).
 
 Сейчас реализованы задания **T1 — подготовка сдачи решения (3 балла)**,
-**T2 — Safety Block (12)**, **T3 — RL-ходьба (готовая политика, до 15)** и
-**T4 — одометрия (20)**.
+**T2 — Safety Block (12)**, **T3 — RL-ходьба (готовая политика, до 15)**,
+**T4 — одометрия (20)** и **T5 — автономная навигация + ArUco (35)**.
 
 ## Требования T1 (по ТЗ)
 
@@ -131,6 +131,44 @@ RTAB-Map (`rgbd_odometry`) по фронтальной RGB-D → узел `odom_
 Стенд: `tools/t4_selfcheck.py` — RPE по `/odom/ground_truth` и дрейф за окно
 покоя.
 
+## T5 — Автономная навигация + ArUco
+
+Кейс T5 поднимает одометрию T4 (RTAB-Map → гейт покоя → EKF: `/odom` + TF
+`odom→trunk`) и поверх неё — навигационный стек и детектор меток:
+
+- **SLAM** — slam_toolbox (online async): карта строится в движении, узел
+  публикует TF `map→odom`; цепочка `map→odom→trunk` полная, карта не
+  сохраняется (по ТЗ не требуется);
+- **Nav2** — bt_navigator с action-сервером `/navigate_to_pose` (цель от
+  Judge), planner_server, smoother и контроллер Regulated Pure Pursuit;
+  costmap и footprint настроены под коридоры 1 м. Узел `goal_relay`
+  дополнительно принимает `PoseStamped` на `/goal_pose` (RViz) и после
+  активации Nav2 переправляет цель в action;
+- **ArUco** — `r8_aruco_detector`: словарь DICT_4X4_50, изображения всех
+  пяти камер T5 (`/camera`, `/camera_chin`, `/camera_left`, `/camera_right`,
+  `/camera_rearDown`; QoS RELIABLE, depth 5 — как в ТЗ). Обнаружение
+  подтверждается тремя последовательными кадрами одной камеры и живёт 0,75 с
+  после последнего кадра; результат — `/aruco/detections`
+  (std_msgs/String, JSON `{"ids": [...]}`) только с реально видимыми в
+  моменте метками, без перечисления всего словаря.
+
+Раскладка: `ros2_ws/src/go1_nav/` (launch, `config/nav2_params.yaml`,
+behavior XML, `goal_relay`), `ros2_ws/src/r8_aruco_detector/`.
+
+Стенд (не входит в образ; цель шлётся action-клиентом, как Judge):
+
+```bash
+docker cp tools/t5_send_goal.py <participant>:/tmp/
+docker exec <participant> bash -c \
+  'source /opt/ros/humble/setup.bash && \
+   source /opt/go1_participant/ros2_ws/install/setup.bash && \
+   python3 /tmp/t5_send_goal.py --x 4.0 --y 0.0 --yaw 0'
+```
+
+Smoke-прогон на публичном курсе 1,0 м: цель достигнута с ошибкой 0,354 м и
+−15° по курсу (лимиты ТЗ — 0,5 м / 30°), за прогон распознаны метки 0–3,
+спама идентификаторов нет.
+
 ## Состав проекта
 
 - `Dockerfile` — образ на базе организаторского
@@ -140,9 +178,10 @@ RTAB-Map (`rgbd_odometry`) по фронтальной RGB-D → узел `odom_
 - `entrypoint.sh` — контракт запуска: аргументы `ping`, `T2`, `T3`, `T4`, `T5`;
 - `ros2_ws/` — рабочее пространство участника: `unitree_go` (сообщения),
   `safety_block` (узел T2), `rl_controller` (RL-ходьба T3),
-  `odometry` (гейт покоя T4);
+  `odometry` (гейт покоя T4), `go1_nav` (SLAM + Nav2 + goal_relay, T5),
+  `r8_aruco_detector` (метки T5);
 - `models/unitree_go1/` — модель Go1 и перечень пар для проверки коллизий;
-- `tools/` — стенды самопроверки T2–T4 (в образ не входят);
+- `tools/` — стенды самопроверки T2–T5 (в образ не входят);
 - `check_t1.sh` — локальная проверка образа по всем критериям ТЗ T1;
 - `README.md` — этот файл.
 
@@ -176,7 +215,8 @@ docker build --platform linux/amd64 -t go1-participant:t1 .
 - `T3` — RL-политика (`rl_node`) + Safety Block, обоим узлам задан
   `use_sim_time`;
 - `T4` — RTAB-Map + гейт покоя + EKF (выход фильтра ремапится в `/odom`);
-- `T5` — не реализовано: диагностика в stderr, код 69;
+- `T5` — одометрия T4 и ArUco-детектор в фоне, затем
+  `ros2 launch go1_nav t5.launch.py` (slam_toolbox + Nav2);
 - Прочее — usage в stderr, код 64.
 
 ## Сдача решения
