@@ -66,6 +66,8 @@ class RLControllerNode(Node):
         self.hist_len = env.get('num_observation_history', 30)
         self.num_commands = cfg.get('commands', {}).get('num_commands', 15)
         self.clip = norm.get('clip_actions', 100.0)
+        # 0.18 подобрана на стенде: конфиговый 0.25 с PD 40/2 (вместо
+        # обученного actuator net) опрокидывает робота на первых шагах.
         self.action_scale = 0.18
         self.hip_red = ctl.get('hip_scale_reduction', 0.5)
         self.dt = ctl.get('decimation', 4) * cfg.get('sim', {}).get('dt', 0.005)
