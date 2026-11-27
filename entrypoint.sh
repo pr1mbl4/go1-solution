@@ -130,6 +130,11 @@ case "${1:-}" in
             --remap odometry/filtered:=/odom \
             &> /tmp/ekf.log &
 
+        # Детектор ArUco: пять камер -> /aruco/detections (JSON с ids)
+        ros2 run r8_aruco_detector aruco_node --ros-args \
+            -p use_sim_time:=true \
+            &> /tmp/aruco.log &
+
         exec ros2 launch go1_nav t5.launch.py
         ;;
     *)
