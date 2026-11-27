@@ -78,8 +78,8 @@ class ArucoNode(Node):
             10
         )
 
-        # Подписки на камеры
-        self.subscriptions = []
+        # Подписки на камеры (список держит ссылки, иначе сборщик удалит)
+        self.camera_subs = []
 
         for topic in self.camera_topics:
             subscription = self.create_subscription(
@@ -90,7 +90,7 @@ class ArucoNode(Node):
                 camera_qos
             )
 
-            self.subscriptions.append(subscription)
+            self.camera_subs.append(subscription)
 
             self.get_logger().info(
                 f'Подписка на камеру: {topic}'
